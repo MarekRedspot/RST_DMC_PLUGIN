@@ -113,7 +113,7 @@ namespace RST_HomePlugin
             {
                 var a = Base.Settings.Axes[i];
                 if (a == null || !a.Enabled) continue;
-                axes.Add(a.UniqueName);
+                axes.Add(a.GetFullName());
             }
             axis_name.list = axes.ToArray();
 
@@ -125,7 +125,7 @@ namespace RST_HomePlugin
                 {
                     if (io == null) continue;
                     if (!io.IsInput) continue;
-                    inputs.Add(io.UniqueName);
+                    inputs.Add(io.unique_name);
                 }
             }
             sensor_input.list = inputs.ToArray();

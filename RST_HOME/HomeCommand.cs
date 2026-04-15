@@ -155,7 +155,7 @@ namespace RST_HomePlugin
 
             var axis = axis_settings.Axis;
             if (axis == null)
-                return Functions.Error(this, "Selected axis '" + axis_settings.UniqueName + "' has no hardware driver.");
+                return Functions.Error(this, "Selected axis '" + axis_settings.GetFullName() + "' has no hardware driver.");
 
             IOTool sensor = Settings.IOTools.GetInput(parameters.sensor_input.Value);
             if (sensor == null)
@@ -248,7 +248,7 @@ namespace RST_HomePlugin
             if (!string.IsNullOrEmpty(parameters.result_position_variable.Value))
                 Recipe.variables.Add(new Variable(parameters.result_position_variable.Value, hit_position));
 
-            StatusBar.Set("RST Home done on '" + axis_settings.UniqueName + "' at " + hit_position.ToString("0.###"), true);
+            Base.StatusBar.Set("RST Home done on '" + axis_settings.GetFullName() + "' at " + hit_position.ToString("0.###"), true);
             return true;
         }
 
@@ -292,7 +292,7 @@ namespace RST_HomePlugin
             double real_speed = Math.Min(Math.Abs(speed), axis_settings.MaxSpeed);
             if (real_speed <= 0)
             {
-                Functions.Error(this, "Axis '" + axis_settings.UniqueName + "' max speed is 0.");
+                Functions.Error(this, "Axis '" + axis_settings.GetFullName() + "' max speed is 0.");
                 return Result.Error;
             }
 
@@ -305,7 +305,7 @@ namespace RST_HomePlugin
                 {
                     if (!free.StartFreemove(dir * real_speed))
                     {
-                        Functions.Error(this, "Unable to start free-move on axis '" + axis_settings.UniqueName + "'.");
+                        Functions.Error(this, "Unable to start free-move on axis '" + axis_settings.GetFullName() + "'.");
                         return Result.Error;
                     }
                     used_freemove = true;
@@ -315,7 +315,7 @@ namespace RST_HomePlugin
                     // Non-blocking Move towards the allowed travel limit.
                     if (!axis.Move(target, real_speed, false))
                     {
-                        Functions.Error(this, "Unable to start motion on axis '" + axis_settings.UniqueName + "'.");
+                        Functions.Error(this, "Unable to start motion on axis '" + axis_settings.GetFullName() + "'.");
                         return Result.Error;
                     }
                 }
@@ -408,7 +408,7 @@ namespace RST_HomePlugin
             if (!string.IsNullOrEmpty(var_name))
                 Recipe.variables.Add(new Variable(var_name, 1));
 
-            StatusBar.Set("RST Home emergency (continuing via variable): " + reason, true);
+            Base.StatusBar.Set("RST Home emergency (continuing via variable): " + reason, true);
             return true;
         }
 
@@ -423,7 +423,7 @@ namespace RST_HomePlugin
             for (int i = 0; i < Base.Settings.Axes.Count; i++)
             {
                 var a = Base.Settings.Axes[i];
-                if (a != null && a.UniqueName == name)
+                if (a != null && a.GetFullName() == name)
                 {
                     if (!a.Enabled && report_errors)
                     {
