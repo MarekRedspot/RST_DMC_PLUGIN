@@ -24,6 +24,12 @@ namespace RST_HomePlugin
             new BoolParameter("direction_positive", "Search Direction", "Direction of the search motion along the selected axis.",
                               false, "Positive", "Negative");
 
+        // Continuous (conveyor) mode: axis runs until the sensor triggers, without any travel limit.
+        // In this mode max_travel is ignored and the axis must support IAxisFreemove.
+        public BoolParameter use_freemove_mode =
+            new BoolParameter("use_freemove_mode", "Freemove Mode", "Runs the axis continuously (no max travel) until the sensor triggers. Intended for conveyors / non-limited axes. Axis must support free-move.",
+                              false, "On", "Off");
+
         // Max allowed travel (safety limit). If sensor is not detected within this distance, command fails.
         public DoubleParameter max_travel =
             new DoubleParameter("max_travel", "Max Travel (mm/deg)", 50.0);
@@ -82,6 +88,7 @@ namespace RST_HomePlugin
         {
             Add(axis_name);
             Add(direction_positive);
+            Add(use_freemove_mode);
             Add(max_travel);
             Add(search_speed);
 
@@ -281,6 +288,10 @@ namespace RST_HomePlugin
 
         public bool IsIParameterVisible(IParameter prm)
         {
+            // Freemove mode hides max_travel (there is no travel limit in that mode).
+            if (prm == max_travel)
+                return !use_freemove_mode.value;
+
             // Precise mode controls visibility of precise_speed and backoff_distance.
             if (prm == precise_speed || prm == backoff_distance)
                 return use_precise_mode.value;
@@ -298,6 +309,9 @@ namespace RST_HomePlugin
 
         public List<IParameter> GetDependencies(IParameter prm)
         {
+            if (prm == use_freemove_mode)
+                return new List<IParameter> { max_travel };
+
             if (prm == use_precise_mode)
                 return new List<IParameter> { precise_speed, backoff_distance };
 

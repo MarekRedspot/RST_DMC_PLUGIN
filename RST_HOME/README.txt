@@ -24,12 +24,22 @@ What it does
        recipe continues executing.
 5. Travel is limited by a user-defined "Max Travel" to prevent crashes if
    the sensor is never reached.
+6. If "Freemove Mode" is ON, the axis is driven as a continuous JOG
+   (IAxisFreemove) with no travel limit - intended for conveyors or any
+   non-limited axis. "Max Travel" is hidden / ignored in that mode. The
+   remaining features (precise approach, emergency sensor, safety
+   variable, result position) work exactly the same. The selected axis
+   must support free-move; otherwise the command fails with a clear
+   error.
 
 Parameters
 ----------
 * Axis                       - axis selected from the axes enabled in DMC settings.
 * Search Direction           - Positive / Negative.
-* Max Travel                 - safety distance (mm or deg).
+* Freemove Mode              - run continuously (no travel limit) until the sensor
+                               triggers. Requires an axis supporting free-move (JOG).
+                               Intended for conveyors / non-limited axes.
+* Max Travel                 - safety distance (mm or deg). Ignored when Freemove Mode is ON.
 * Search Speed               - coarse speed used to find the sensor.
 * Precise Mode               - enables two-speed precise approach.
 * Precise Speed              - slow approach speed (only when Precise Mode is ON).
