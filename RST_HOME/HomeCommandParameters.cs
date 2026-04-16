@@ -139,84 +139,126 @@ namespace RST_HomePlugin
 
         /// <summary>
         /// Returns the user-visible name of an IOTool preset (e.g. "test home"
-        /// configured in File -> Settings -> IO Tools). DMC does not expose this
-        /// via a stable public member (the public <c>unique_name</c> field is the
-        /// class-type identifier "io_tool" shared by every instance, and there is
-        /// no <c>FriendlyName</c>/<c>Name</c> property on <see cref="IOTool"/>).
-        /// We probe common field/property names via reflection and fall back to
-        /// <see cref="object.ToString"/> as a last resort.
+        /// configured in File -> Settings -> IO Tools).
+        ///
+        /// This is harder than it should be. <see cref="IOTool"/> derives from
+        /// MultiParameter and therefore exposes several *class-level* labels
+        /// (<c>unique_name</c>="io_tool", <c>friendly_name</c>="IOPreset",
+        /// <c>title</c>="IOPreset") which are shared by every IOTool instance.
+        /// The user-configured per-instance name is stored separately - DMC
+        /// persists it via a <c>PresetName</c> auto-property and/or a
+        /// <c>preset_name</c> parameter-wrapper field. We probe those first
+        /// (prioritising instance-level members) and reject the well-known
+        /// class-level sentinels ("io_tool", "IOPreset", ...) so we never
+        /// return a label that would be identical for every input.
         /// </summary>
         public static string GetIOToolName(IOTool io)
         {
             if (io == null) return "";
             var t = io.GetType();
 
-            // Try public/instance properties that typically hold the display name.
-            string[] propNames = { "Name", "FriendlyName", "DisplayName", "Title", "PresetName" };
-            foreach (var name in propNames)
+            // 1. Per-instance preset name - direct auto-property.
+            string[] preferredProps = { "PresetName", "InstanceName", "UserName", "Name", "DisplayName" };
+            foreach (var name in preferredProps)
+            {
+                var v = TryReadStringMember(io, t, name, asProperty: true);
+                if (!IsClassLevelSentinel(v)) return v;
+            }
+
+            // 2. Per-instance preset name - parameter-wrapper field.
+            string[] preferredFields = { "preset_name", "instance_name", "user_name", "display_name", "name" };
+            foreach (var name in preferredFields)
+            {
+                var v = TryReadStringMember(io, t, name, asProperty: false);
+                if (!IsClassLevelSentinel(v)) return v;
+            }
+
+            // 3. As a very last resort, fall back to the class-level friendly
+            // label so we at least render *something* (the user will then see
+            // identical entries for every input and know to rename the preset).
+            string[] lastResort = { "friendly_name", "title" };
+            foreach (var name in lastResort)
+            {
+                var v = TryReadStringMember(io, t, name, asProperty: false);
+                if (!string.IsNullOrEmpty(v)) return v;
+            }
+
+            try { return io.ToString() ?? ""; } catch (Exception) { return ""; }
+        }
+
+        private static bool IsClassLevelSentinel(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return true;
+            // Class-level labels that the DMC framework sets in IOTool's
+            // base constructor - they are identical for every instance and
+            // must never be used to identify one preset vs. another.
+            return s == "io_tool" || s == "IOPreset" || s == "IOInputPreset" ||
+                   s == "IOOutputPreset" || s == "IOTool";
+        }
+
+        private static string TryReadStringMember(object obj, Type t, string memberName, bool asProperty)
+        {
+            if (obj == null || t == null) return "";
+            var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy;
+
+            Type walker = t;
+            while (walker != null)
             {
                 try
                 {
-                    var p = t.GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    if (p == null) continue;
-                    if (p.PropertyType != typeof(string)) continue;
-                    var v = p.GetValue(io, null) as string;
-                    if (!string.IsNullOrEmpty(v)) return v;
+                    object raw = null;
+                    if (asProperty)
+                    {
+                        var p = walker.GetProperty(memberName, flags);
+                        if (p != null && p.CanRead) raw = p.GetValue(obj, null);
+                    }
+                    else
+                    {
+                        var f = walker.GetField(memberName, flags);
+                        if (f != null) raw = f.GetValue(obj);
+                    }
+
+                    var s = UnwrapToString(raw);
+                    if (!string.IsNullOrEmpty(s)) return s;
                 }
                 catch (Exception) { }
+                walker = walker.BaseType;
             }
+            return "";
+        }
 
-            // Try fields (including non-public). Some MultiParameter-based classes
-            // store the user name in a protected/internal field ("friendly_name",
-            // "name", "title"). The field may be a plain string or a parameter
-            // wrapper (StringParameter) that has a .Value/.value.
-            string[] fieldNames = { "friendly_name", "name", "display_name", "title", "preset_name" };
-            var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
-                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy;
-            Type tw = t;
-            while (tw != null)
-            {
-                foreach (var name in fieldNames)
-                {
-                    try
-                    {
-                        var f = tw.GetField(name, flags);
-                        if (f == null) continue;
-                        var fv = f.GetValue(io);
-                        if (fv == null) continue;
-                        if (fv is string s)
-                        {
-                            if (!string.IsNullOrEmpty(s) && s != "io_tool") return s;
-                            continue;
-                        }
-                        // Parameter wrapper: look for .Value (string) or .value.
-                        var vt = fv.GetType();
-                        var vp = vt.GetProperty("Value");
-                        if (vp != null && vp.PropertyType == typeof(string))
-                        {
-                            var sv = vp.GetValue(fv, null) as string;
-                            if (!string.IsNullOrEmpty(sv) && sv != "io_tool") return sv;
-                        }
-                        var vf = vt.GetField("value");
-                        if (vf != null && vf.FieldType == typeof(string))
-                        {
-                            var sv = vf.GetValue(fv) as string;
-                            if (!string.IsNullOrEmpty(sv) && sv != "io_tool") return sv;
-                        }
-                    }
-                    catch (Exception) { }
-                }
-                tw = tw.BaseType;
-            }
+        /// <summary>
+        /// Returns the raw object as a string if possible. If the object is a
+        /// parameter wrapper (has a <c>.Value</c> or <c>.value</c> member),
+        /// the wrapped string is returned instead.
+        /// </summary>
+        private static string UnwrapToString(object raw)
+        {
+            if (raw == null) return "";
+            if (raw is string direct) return direct;
 
-            // Last-resort: ToString() frequently returns a reasonable label.
+            var vt = raw.GetType();
             try
             {
-                var s = io.ToString();
-                if (!string.IsNullOrEmpty(s)) return s;
+                var prop = vt.GetProperty("Value");
+                if (prop != null && prop.PropertyType == typeof(string))
+                {
+                    var sv = prop.GetValue(raw, null) as string;
+                    if (!string.IsNullOrEmpty(sv)) return sv;
+                }
             }
             catch (Exception) { }
-
+            try
+            {
+                var f = vt.GetField("value");
+                if (f != null && f.FieldType == typeof(string))
+                {
+                    var sv = f.GetValue(raw) as string;
+                    if (!string.IsNullOrEmpty(sv)) return sv;
+                }
+            }
+            catch (Exception) { }
             return "";
         }
 
