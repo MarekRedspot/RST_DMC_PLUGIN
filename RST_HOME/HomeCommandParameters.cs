@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Base;
 
@@ -117,10 +118,11 @@ namespace RST_HomePlugin
             }
             axis_name.list = axes.ToArray();
 
-            // Digital inputs: take IO tools that are inputs. Use FriendlyName -
-            // the user-configured name from Settings -> IO Tools -> Inputs (e.g. "test home").
-            // unique_name is the class-type identifier (equal to "io_tool" for every
-            // IOTool instance) and is NOT suitable as a lookup key.
+            // Digital inputs: take IO tools that are inputs. IOTool does not expose
+            // a public .Name / .FriendlyName / .UniqueName that holds the user-configured
+            // preset name (the one visible in Settings -> IO Tools -> Name, e.g. "test home"),
+            // and its .unique_name field is a class-type identifier common to all IOTool
+            // instances ("io_tool"). Use reflection to find the right field/property.
             var inputs = new List<string>();
             if (Base.Settings.IOTools != null && Base.Settings.IOTools.list != null)
             {
@@ -128,11 +130,94 @@ namespace RST_HomePlugin
                 {
                     if (io == null) continue;
                     if (!io.IsInput) continue;
-                    inputs.Add(io.FriendlyName);
+                    inputs.Add(GetIOToolName(io));
                 }
             }
             sensor_input.list = inputs.ToArray();
             safety_input.list = inputs.ToArray();
+        }
+
+        /// <summary>
+        /// Returns the user-visible name of an IOTool preset (e.g. "test home"
+        /// configured in File -> Settings -> IO Tools). DMC does not expose this
+        /// via a stable public member (the public <c>unique_name</c> field is the
+        /// class-type identifier "io_tool" shared by every instance, and there is
+        /// no <c>FriendlyName</c>/<c>Name</c> property on <see cref="IOTool"/>).
+        /// We probe common field/property names via reflection and fall back to
+        /// <see cref="object.ToString"/> as a last resort.
+        /// </summary>
+        public static string GetIOToolName(IOTool io)
+        {
+            if (io == null) return "";
+            var t = io.GetType();
+
+            // Try public/instance properties that typically hold the display name.
+            string[] propNames = { "Name", "FriendlyName", "DisplayName", "Title", "PresetName" };
+            foreach (var name in propNames)
+            {
+                try
+                {
+                    var p = t.GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (p == null) continue;
+                    if (p.PropertyType != typeof(string)) continue;
+                    var v = p.GetValue(io, null) as string;
+                    if (!string.IsNullOrEmpty(v)) return v;
+                }
+                catch (Exception) { }
+            }
+
+            // Try fields (including non-public). Some MultiParameter-based classes
+            // store the user name in a protected/internal field ("friendly_name",
+            // "name", "title"). The field may be a plain string or a parameter
+            // wrapper (StringParameter) that has a .Value/.value.
+            string[] fieldNames = { "friendly_name", "name", "display_name", "title", "preset_name" };
+            var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy;
+            Type tw = t;
+            while (tw != null)
+            {
+                foreach (var name in fieldNames)
+                {
+                    try
+                    {
+                        var f = tw.GetField(name, flags);
+                        if (f == null) continue;
+                        var fv = f.GetValue(io);
+                        if (fv == null) continue;
+                        if (fv is string s)
+                        {
+                            if (!string.IsNullOrEmpty(s) && s != "io_tool") return s;
+                            continue;
+                        }
+                        // Parameter wrapper: look for .Value (string) or .value.
+                        var vt = fv.GetType();
+                        var vp = vt.GetProperty("Value");
+                        if (vp != null && vp.PropertyType == typeof(string))
+                        {
+                            var sv = vp.GetValue(fv, null) as string;
+                            if (!string.IsNullOrEmpty(sv) && sv != "io_tool") return sv;
+                        }
+                        var vf = vt.GetField("value");
+                        if (vf != null && vf.FieldType == typeof(string))
+                        {
+                            var sv = vf.GetValue(fv) as string;
+                            if (!string.IsNullOrEmpty(sv) && sv != "io_tool") return sv;
+                        }
+                    }
+                    catch (Exception) { }
+                }
+                tw = tw.BaseType;
+            }
+
+            // Last-resort: ToString() frequently returns a reasonable label.
+            try
+            {
+                var s = io.ToString();
+                if (!string.IsNullOrEmpty(s)) return s;
+            }
+            catch (Exception) { }
+
+            return "";
         }
 
         // ---- IGUIManagerParameter -----------------------------------------
