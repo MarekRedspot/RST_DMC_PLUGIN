@@ -141,46 +141,60 @@ namespace RST_HomePlugin
         /// Returns the user-visible name of an IOTool preset (e.g. "test home"
         /// configured in File -> Settings -> IO Tools).
         ///
-        /// This is harder than it should be. <see cref="IOTool"/> derives from
-        /// MultiParameter and therefore exposes several *class-level* labels
-        /// (<c>unique_name</c>="io_tool", <c>friendly_name</c>="IOPreset",
-        /// <c>title</c>="IOPreset") which are shared by every IOTool instance.
-        /// The user-configured per-instance name is stored separately - DMC
-        /// persists it via a <c>PresetName</c> auto-property and/or a
-        /// <c>preset_name</c> parameter-wrapper field. We probe those first
-        /// (prioritising instance-level members) and reject the well-known
-        /// class-level sentinels ("io_tool", "IOPreset", ...) so we never
-        /// return a label that would be identical for every input.
+        /// DMC's actual data model (confirmed against Base.dll metadata):
+        ///   <c>Base.IOTool : Base.IOPreset : Base.MultiParameter</c>
+        /// and <c>IOPreset</c> declares a <c>custom_name</c> parameter field plus
+        /// a <c>GetName()</c> instance method. The user-configured preset name
+        /// lives in <c>custom_name.Value</c> - NOT in any inherited MultiParameter
+        /// label (<c>unique_name</c>="io_tool", <c>friendly_name</c>="IOPreset"
+        /// are class-level and identical across every IOTool instance).
+        ///
+        /// Reflection is used so the plugin still compiles against any DMC build
+        /// that keeps the <c>custom_name</c> member internal or renames it.
         /// </summary>
         public static string GetIOToolName(IOTool io)
         {
             if (io == null) return "";
             var t = io.GetType();
 
-            // 1. Per-instance preset name - direct auto-property.
-            string[] preferredProps = { "PresetName", "InstanceName", "UserName", "Name", "DisplayName" };
-            foreach (var name in preferredProps)
+            // 1. IOPreset.custom_name - the per-instance user preset name.
+            var v = TryReadStringMember(io, t, "custom_name", asProperty: false);
+            if (!IsClassLevelSentinel(v)) return v;
+
+            // 2. IOPreset.GetName() - public instance method defined on IOPreset.
+            try
             {
-                var v = TryReadStringMember(io, t, name, asProperty: true);
-                if (!IsClassLevelSentinel(v)) return v;
+                var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy;
+                var m = t.GetMethod("GetName", flags, null, Type.EmptyTypes, null);
+                if (m != null && m.ReturnType == typeof(string))
+                {
+                    var s = m.Invoke(io, null) as string;
+                    if (!IsClassLevelSentinel(s)) return s;
+                }
+            }
+            catch (Exception) { }
+
+            // 3. Other plausible per-instance members (defensive, in case DMC
+            //    renames custom_name in a future version).
+            string[] fallbackFields = { "preset_name", "instance_name", "user_name", "name" };
+            foreach (var name in fallbackFields)
+            {
+                var s = TryReadStringMember(io, t, name, asProperty: false);
+                if (!IsClassLevelSentinel(s)) return s;
+            }
+            string[] fallbackProps = { "PresetName", "InstanceName", "UserName", "CustomName", "Name" };
+            foreach (var name in fallbackProps)
+            {
+                var s = TryReadStringMember(io, t, name, asProperty: true);
+                if (!IsClassLevelSentinel(s)) return s;
             }
 
-            // 2. Per-instance preset name - parameter-wrapper field.
-            string[] preferredFields = { "preset_name", "instance_name", "user_name", "display_name", "name" };
-            foreach (var name in preferredFields)
+            // 4. Absolute last resort - a class-level label so we render something.
+            foreach (var name in new[] { "friendly_name", "title" })
             {
-                var v = TryReadStringMember(io, t, name, asProperty: false);
-                if (!IsClassLevelSentinel(v)) return v;
-            }
-
-            // 3. As a very last resort, fall back to the class-level friendly
-            // label so we at least render *something* (the user will then see
-            // identical entries for every input and know to rename the preset).
-            string[] lastResort = { "friendly_name", "title" };
-            foreach (var name in lastResort)
-            {
-                var v = TryReadStringMember(io, t, name, asProperty: false);
-                if (!string.IsNullOrEmpty(v)) return v;
+                var s = TryReadStringMember(io, t, name, asProperty: false);
+                if (!string.IsNullOrEmpty(s)) return s;
             }
 
             try { return io.ToString() ?? ""; } catch (Exception) { return ""; }
