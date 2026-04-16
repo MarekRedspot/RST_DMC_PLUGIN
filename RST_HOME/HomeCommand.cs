@@ -157,14 +157,14 @@ namespace RST_HomePlugin
             if (axis == null)
                 return Functions.Error(this, "Selected axis '" + axis_settings.GetFullName() + "' has no hardware driver.");
 
-            IOTool sensor = Settings.IOTools.GetInput(parameters.sensor_input.Value);
+            IOTool sensor = FindInputByName(parameters.sensor_input.Value);
             if (sensor == null)
                 return Functions.Error(this, "Digital input '" + parameters.sensor_input.Value + "' not found or is not an input.");
 
             IOTool safety = null;
             if (parameters.use_safety_sensor.value)
             {
-                safety = Settings.IOTools.GetInput(parameters.safety_input.Value);
+                safety = FindInputByName(parameters.safety_input.Value);
                 if (safety == null)
                     return Functions.Error(this, "Emergency input '" + parameters.safety_input.Value + "' not found or is not an input.");
             }
@@ -434,6 +434,40 @@ namespace RST_HomePlugin
                 }
             }
             if (report_errors) Functions.Error(this, "Axis '" + name + "' not found.");
+            return null;
+        }
+
+        /// <summary>
+        /// Finds a digital input by its user-visible name. Tries the built-in
+        /// <see cref="IOTools.GetInput"/> lookup first, then falls back to a
+        /// scan of <see cref="Settings.IOTools.list"/> matching against the
+        /// reflected preset name (see <see cref="HomeCommandParameters.GetIOToolName"/>).
+        /// This is needed because what the GUI shows is the user-configured
+        /// preset name (e.g. "test home"), not the internal class-type
+        /// <c>unique_name</c> that <see cref="IOTools.GetInput"/> matches on.
+        /// </summary>
+        private static IOTool FindInputByName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+
+            // Standard lookup (works if the name happens to match unique_name).
+            try
+            {
+                var io = Settings.IOTools.GetInput(name);
+                if (io != null) return io;
+            }
+            catch (Exception) { }
+
+            // Fallback: scan the raw list and match by the user-visible label.
+            if (Settings.IOTools != null && Settings.IOTools.list != null)
+            {
+                foreach (var io in Settings.IOTools.list)
+                {
+                    if (io == null) continue;
+                    if (!io.IsInput) continue;
+                    if (HomeCommandParameters.GetIOToolName(io) == name) return io;
+                }
+            }
             return null;
         }
 
