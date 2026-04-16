@@ -117,7 +117,10 @@ namespace RST_HomePlugin
             }
             axis_name.list = axes.ToArray();
 
-            // Digital inputs: take IO tools that are inputs.
+            // Digital inputs: take IO tools that are inputs. Use FriendlyName -
+            // the user-configured name from Settings -> IO Tools -> Inputs (e.g. "test home").
+            // unique_name is the class-type identifier (equal to "io_tool" for every
+            // IOTool instance) and is NOT suitable as a lookup key.
             var inputs = new List<string>();
             if (Base.Settings.IOTools != null && Base.Settings.IOTools.list != null)
             {
@@ -125,7 +128,7 @@ namespace RST_HomePlugin
                 {
                     if (io == null) continue;
                     if (!io.IsInput) continue;
-                    inputs.Add(io.unique_name);
+                    inputs.Add(io.FriendlyName);
                 }
             }
             sensor_input.list = inputs.ToArray();
