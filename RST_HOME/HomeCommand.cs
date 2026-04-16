@@ -49,9 +49,10 @@ namespace RST_HomePlugin
             string axis = string.IsNullOrEmpty(parameters.axis_name.Value) ? "?" : parameters.axis_name.Value;
             string dir = parameters.direction_positive.value ? "+" : "-";
             string sensor = string.IsNullOrEmpty(parameters.sensor_input.Value) ? "?" : parameters.sensor_input.Value;
+            string freemove = parameters.use_freemove_mode.value ? " freemove" : "";
             string precise = parameters.use_precise_mode.value ? " precise" : "";
             string safety = parameters.use_safety_sensor.value ? " +safety" : "";
-            return axis + " " + dir + " @ " + sensor + precise + safety;
+            return axis + " " + dir + " @ " + sensor + freemove + precise + safety;
         }
 
         // Auto-generated GUI form built from the parameter list. The parameter wrapper
@@ -97,7 +98,9 @@ namespace RST_HomePlugin
             if (string.IsNullOrEmpty(parameters.sensor_input.Value))
                 return Functions.Error(this, "Homing sensor (digital input) is not selected.");
 
-            if (parameters.max_travel.value <= 0)
+            // max_travel is only a safety limit for normal (limited) axes; in
+            // freemove/conveyor mode we run continuously until the sensor hits.
+            if (!parameters.use_freemove_mode.value && parameters.max_travel.value <= 0)
                 return Functions.Error(this, "'" + parameters.max_travel.title + "' must be > 0.");
 
             if (parameters.search_speed.value <= 0)
@@ -157,6 +160,11 @@ namespace RST_HomePlugin
             if (axis == null)
                 return Functions.Error(this, "Selected axis '" + axis_settings.GetFullName() + "' has no hardware driver.");
 
+            // Freemove (conveyor) mode requires the axis driver to support IAxisFreemove
+            // because we drive it as a continuous JOG without a target position.
+            if (parameters.use_freemove_mode.value && !(axis is IAxisFreemove))
+                return Functions.Error(this, "Freemove mode requires an axis driver that supports free-move (JOG). Selected axis '" + axis_settings.GetFullName() + "' does not.");
+
             IOTool sensor = FindInputByName(parameters.sensor_input.Value);
             if (sensor == null)
                 return Functions.Error(this, "Digital input '" + parameters.sensor_input.Value + "' not found or is not an input.");
@@ -178,12 +186,16 @@ namespace RST_HomePlugin
             }
 
             // Phase 1: coarse search at search_speed.
+            // In freemove mode travel is unlimited - we pass unlimited=true so the
+            // poll loop never times out on distance.
+            bool unlimited = parameters.use_freemove_mode.value;
             double hit_position = 0;
             var phase1_result = MoveUntilSensor(
                 axis_settings,
                 dir,
                 parameters.search_speed.value,
                 parameters.max_travel.value,
+                unlimited,
                 sensor,
                 parameters.sensor_active_high.value,
                 safety,
@@ -222,6 +234,7 @@ namespace RST_HomePlugin
                     dir,
                     parameters.precise_speed.value,
                     precise_max_travel,
+                    false, // precise approach always uses the backoff-derived travel bound
                     sensor,
                     parameters.sensor_active_high.value,
                     safety,
@@ -261,13 +274,20 @@ namespace RST_HomePlugin
         /// <summary>
         /// Drives the axis in <paramref name="dir"/> direction at <paramref name="speed"/>
         /// and polls the sensor. Stops as soon as the sensor triggers, cancel is raised,
-        /// travel exceeds <paramref name="max_travel"/>, or the optional safety sensor triggers.
+        /// travel exceeds <paramref name="max_travel"/> (unless <paramref name="unlimited"/>
+        /// is set), or the optional safety sensor triggers.
+        ///
+        /// When <paramref name="unlimited"/> is true the axis runs continuously (JOG)
+        /// without any distance cap - used for conveyor / freemove mode. The axis
+        /// is required to support <see cref="IAxisFreemove"/> in this case; the
+        /// caller is expected to validate that up-front.
         /// </summary>
         private Result MoveUntilSensor(
             IAxisSettings axis_settings,
             double dir,
             double speed,
             double max_travel,
+            bool unlimited,
             IOTool sensor, bool sensor_active_high,
             IOTool safety, bool safety_active_high,
             out double hit_position)
@@ -284,7 +304,7 @@ namespace RST_HomePlugin
                 return Result.Ok;
             }
 
-            // Compute a fallback target for axes that don't support freemove.
+            // Fallback target for axes that don't support freemove (limited mode only).
             double target = start_position + dir * max_travel;
             target = Clamp(target, axis_settings.MinPosition, axis_settings.MaxPosition);
 
@@ -297,6 +317,8 @@ namespace RST_HomePlugin
             }
 
             // Start motion. Prefer IAxisFreemove (JOG) because it runs until we stop it.
+            // In unlimited (conveyor) mode this is the only acceptable drive - the Run()
+            // caller has already verified IAxisFreemove is available.
             IAxisFreemove free = axis as IAxisFreemove;
             bool used_freemove = false;
             try
@@ -309,6 +331,12 @@ namespace RST_HomePlugin
                         return Result.Error;
                     }
                     used_freemove = true;
+                }
+                else if (unlimited)
+                {
+                    // Should have been caught in Run(), but stay defensive.
+                    Functions.Error(this, "Freemove mode requested but axis '" + axis_settings.GetFullName() + "' does not support IAxisFreemove.");
+                    return Result.Error;
                 }
                 else
                 {
@@ -346,25 +374,28 @@ namespace RST_HomePlugin
                         return Result.Ok;
                     }
 
-                    // Travel limit.
+                    // Travel limit - skipped entirely in unlimited (conveyor) mode.
                     double current = axis.GetPosition();
-                    traveled = Math.Abs(current - start_position);
-                    if (traveled > max_travel + 1e-6)
+                    if (!unlimited)
                     {
-                        StopMotion(axis, free, used_freemove);
-                        hit_position = current;
-                        return Result.TravelExceeded;
-                    }
-
-                    // Hard safety: if Move was issued and the axis reached the target without a hit.
-                    if (!used_freemove)
-                    {
-                        var state = axis.GetAxisState();
-                        if (!state.HasFlag(AxisState.Moving) && sw.ElapsedMilliseconds > 50)
+                        traveled = Math.Abs(current - start_position);
+                        if (traveled > max_travel + 1e-6)
                         {
-                            // Motion finished but sensor not detected.
+                            StopMotion(axis, free, used_freemove);
                             hit_position = current;
                             return Result.TravelExceeded;
+                        }
+
+                        // Hard safety: if Move was issued and the axis reached the target without a hit.
+                        if (!used_freemove)
+                        {
+                            var state = axis.GetAxisState();
+                            if (!state.HasFlag(AxisState.Moving) && sw.ElapsedMilliseconds > 50)
+                            {
+                                // Motion finished but sensor not detected.
+                                hit_position = current;
+                                return Result.TravelExceeded;
+                            }
                         }
                     }
 
